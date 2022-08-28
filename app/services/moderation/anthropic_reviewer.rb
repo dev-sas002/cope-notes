@@ -1,34 +1,23 @@
 # frozen_string_literal: true
 
-require 'json'
-require 'net/http'
-require 'uri'
-
 module Moderation
-  # Reviews note text with Claude via the Anthropic Messages API.
-  #
-  # This talks to the REST endpoint with Net::HTTP rather than the official
-  # `anthropic` gem, for one reason: the gem requires Ruby >= 3.2 and this
-  # application is pinned to Ruby 3.0.2 by Rails 6.1. Should the app move to a
-  # newer Ruby, swapping the body of #review for the SDK is a contained change -
-  # the Verdict contract is what the rest of the app depends on.
+  # Reviews note text with Claude through the official `anthropic` gem.
   #
   # It is never reached unless ANTHROPIC_API_KEY is set, and Screener falls back
   # to the local reviewer if this one raises, so a missing key, a rate limit or
   # an outage all degrade to the offline behaviour rather than blocking writes.
   class AnthropicReviewer
-    ENDPOINT = URI('https://api.anthropic.com/v1/messages')
-    API_VERSION = '2023-06-01'
-    DEFAULT_MODEL = 'claude-opus-5'
+    DEFAULT_MODEL = 'claude-opus-5-5'
     MAX_TOKENS = 1_024
     DEFAULT_TIMEOUT = 10
+    # The text under review can itself be about self-harm, which is exactly the
+    # material a safety classifier may decline. Server-side fallback lets
+    # another model answer in the same call instead of the review being lost.
+    FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 
     SYSTEM_PROMPT = <<~PROMPT
       You screen short supportive notes that a mental-health service sends to
       subscribers who are struggling. Judge only the note text you are given.
-
-      Answer with a single JSON object and nothing else:
-        {"status": "approved" | "flagged" | "rejected", "notes": "<one short sentence>"}
 
       rejected - the note could cause harm: it encourages self-harm or suicide,
                  gives medical, medication or dosage advice, promises a cure, or
@@ -36,7 +25,20 @@ module Moderation
       flagged  - the note is not harmful but a human should look at it: it is
                  dismissive, preachy, references self-harm, or is off-topic.
       approved - the note is a supportive message that is safe to send.
+
+      Put one short sentence explaining the decision in "notes".
     PROMPT
+
+    # Structured output: the API guarantees the reply matches this schema.
+    VERDICT_SCHEMA = {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: Message::REVIEW_STATUSES },
+        notes: { type: 'string' }
+      },
+      required: %w[status notes],
+      additionalProperties: false
+    }.freeze
 
     class ReviewError < StandardError; end
 
@@ -48,75 +50,51 @@ module Moderation
       api_key.present?
     end
 
-    def initialize(api_key: self.class.api_key, model: ENV.fetch('ANTHROPIC_MODEL', DEFAULT_MODEL),
-                   timeout: Deliveries.env_integer('ANTHROPIC_TIMEOUT_SECONDS', DEFAULT_TIMEOUT))
-      raise ReviewError, 'ANTHROPIC_API_KEY is not set' if api_key.blank?
+    def initialize(api_key: self.class.api_key, model: ENV.fetch('ANTHROPIC_MODEL', DEFAULT_MODEL), client: nil)
+      raise ReviewError, 'ANTHROPIC_API_KEY is not set' if api_key.blank? && client.nil?
 
-      @api_key = api_key
       @model = model
-      @timeout = timeout
+      # One retry at most: a writer is waiting on this request, and the
+      # heuristic reviewer is a perfectly good answer when the API is slow.
+      @client = client || Anthropic::Client.new(
+        api_key: api_key,
+        max_retries: 1,
+        timeout: Deliveries.env_integer('ANTHROPIC_TIMEOUT_SECONDS', DEFAULT_TIMEOUT)
+      )
     end
 
     def review(text)
       parsed = parse(request(text))
-      Verdict.new(
-        status: normalise(parsed['status']),
-        notes: parsed['notes'],
-        reviewer: "anthropic/#{model}"
-      )
+      Verdict.new(status: parsed.fetch('status'), notes: parsed['notes'], reviewer: "anthropic/#{model}")
     end
 
     private
 
-    attr_reader :api_key, :model, :timeout
+    attr_reader :client, :model
 
     def request(text)
-      http = Net::HTTP.new(ENDPOINT.host, ENDPOINT.port)
-      http.use_ssl = true
-      http.open_timeout = timeout
-      http.read_timeout = timeout
-
-      response = http.request(post_request(text))
-      raise ReviewError, "Anthropic API returned #{response.code}" unless response.is_a?(Net::HTTPSuccess)
-
-      response.body
-    end
-
-    def post_request(text)
-      request = Net::HTTP::Post.new(ENDPOINT)
-      request['content-type'] = 'application/json'
-      request['x-api-key'] = api_key
-      request['anthropic-version'] = API_VERSION
-      request.body = JSON.generate(
+      client.beta.messages.create(
         model: model,
         max_tokens: MAX_TOKENS,
-        system: SYSTEM_PROMPT,
-        # A short classification does not need deep reasoning; low effort keeps
-        # the call cheap and fast while leaving thinking enabled.
-        output_config: { effort: 'low' },
-        messages: [{ role: 'user', content: "Note text:\n#{text}" }]
+        system_: SYSTEM_PROMPT,
+        # A short classification does not need deep reasoning.
+        output_config: { effort: :low, format_: { type: :json_schema, schema: VERDICT_SCHEMA } },
+        messages: [{ role: 'user', content: "Note text:\n#{text}" }],
+        fallbacks: :default,
+        betas: [FALLBACK_BETA]
       )
-      request
     end
 
-    # The model is asked for bare JSON, but a stray sentence around it should not
-    # take the endpoint down - pull out the first JSON object and parse that.
-    def parse(body)
-      payload = JSON.parse(body)
-      text = Array(payload['content']).filter_map { |block| block['text'] if block['type'] == 'text' }.join
-      json = text[/\{.*\}/m]
-      raise ReviewError, 'Anthropic API returned no JSON object' if json.nil?
+    def parse(response)
+      raise ReviewError, 'Anthropic API declined to review this note' if response.stop_reason == :refusal
 
-      JSON.parse(json)
+      text = response.content.filter_map { |block| block.text if block.type == :text }.join
+      parsed = JSON.parse(text)
+      return parsed if Message::REVIEW_STATUSES.include?(parsed['status'])
+
+      raise ReviewError, "Anthropic API returned unknown status #{parsed['status'].inspect}"
     rescue JSON::ParserError => e
       raise ReviewError, "could not parse Anthropic response: #{e.message}"
-    end
-
-    def normalise(status)
-      candidate = status.to_s.downcase
-      return candidate if Message::REVIEW_STATUSES.include?(candidate)
-
-      raise ReviewError, "Anthropic API returned unknown status #{status.inspect}"
     end
   end
 end

@@ -1,26 +1,15 @@
 require 'rails_helper'
 
-# Every example here stubs the HTTP layer. No spec in this suite may make a real
-# call to a paid API.
+# Every example here injects a fake client. No spec in this suite may make a
+# real call to a paid API.
 RSpec.describe Moderation::AnthropicReviewer do
-  let(:http) { instance_double(Net::HTTP) }
+  let(:messages) { double('beta.messages') } # rubocop:disable RSpec/VerifiedDoubles -- SDK resource proxies are built dynamically
+  let(:client) { double('Anthropic::Client', beta: double('beta', messages: messages)) } # rubocop:disable RSpec/VerifiedDoubles
 
-  before do
-    allow(Net::HTTP).to receive(:new).and_return(http)
-    allow(http).to receive(:use_ssl=)
-    allow(http).to receive(:open_timeout=)
-    allow(http).to receive(:read_timeout=)
-  end
-
-  def stub_response(code_class, body, code = '200')
-    response = code_class.new('1.1', code, 'OK')
-    allow(response).to receive(:body).and_return(body)
-    allow(http).to receive(:request).and_return(response)
-    response
-  end
-
-  def message_payload(text)
-    JSON.generate(content: [{ type: 'text', text: text }])
+  def stub_reply(text, stop_reason: :end_turn)
+    block = Struct.new(:type, :text).new(:text, text)
+    response = Struct.new(:content, :stop_reason).new([block], stop_reason)
+    allow(messages).to receive(:create).and_return(response)
   end
 
   describe '.configured?' do
@@ -37,57 +26,56 @@ RSpec.describe Moderation::AnthropicReviewer do
   end
 
   describe '#review' do
-    subject(:reviewer) { described_class.new(api_key: 'sk-test') }
+    subject(:reviewer) { described_class.new(client: client) }
 
     it 'returns the verdict the model gives' do
-      stub_response(Net::HTTPOK,
-                    message_payload('{"status":"rejected","notes":"tells the reader to stop taking medication"}'))
+      stub_reply('{"status":"rejected","notes":"tells the reader to stop taking medication"}')
 
       verdict = reviewer.review('stop your pills')
 
       expect(verdict).to be_rejected
       expect(verdict.notes).to eq('tells the reader to stop taking medication')
-      expect(verdict.reviewer).to start_with('anthropic/')
+      expect(verdict.reviewer).to eq("anthropic/#{described_class::DEFAULT_MODEL}")
     end
 
-    it 'tolerates prose around the JSON object' do
-      stub_response(Net::HTTPOK,
-                    message_payload("Here you go:\n{\"status\":\"approved\",\"notes\":\"safe\"}\nHope that helps."))
-
-      expect(reviewer.review('you are doing fine').status).to eq(Message::APPROVED)
-    end
-
-    it 'sends the note text and the configured model' do
-      stub_response(Net::HTTPOK, message_payload('{"status":"approved"}'))
+    it 'sends the note text, the model, a JSON schema and the fallback opt-in' do
+      stub_reply('{"status":"approved","notes":"kind"}')
       reviewer.review('a kind note')
 
-      expect(http).to have_received(:request) do |request|
-        body = JSON.parse(request.body)
-        expect(body['model']).to eq(described_class::DEFAULT_MODEL)
-        expect(body['messages'].first['content']).to include('a kind note')
+      expect(messages).to have_received(:create) do |params|
+        expect(params[:model]).to eq(described_class::DEFAULT_MODEL)
+        expect(params[:messages].first[:content]).to include('a kind note')
+        expect(params[:output_config]).to include(effort: :low)
+        expect(params[:output_config][:format_][:schema][:properties][:status][:enum]).to eq(Message::REVIEW_STATUSES)
+        expect(params).to include(fallbacks: :default, betas: [described_class::FALLBACK_BETA])
       end
     end
 
-    it 'raises when the API returns an error status' do
-      stub_response(Net::HTTPTooManyRequests, '', '429')
+    it 'raises when every model declines, so the screener falls back' do
+      stub_reply('', stop_reason: :refusal)
 
-      expect { reviewer.review('anything') }
-        .to raise_error(described_class::ReviewError, /Anthropic API returned 429/)
+      expect { reviewer.review('anything') }.to raise_error(described_class::ReviewError, /declined/)
     end
 
-    it 'raises when the response contains no JSON object' do
-      stub_response(Net::HTTPOK, message_payload('I would rather not say'))
+    it 'raises when the response is not JSON' do
+      stub_reply('I would rather not say')
 
-      expect { reviewer.review('anything') }.to raise_error(described_class::ReviewError, /no JSON object/)
+      expect { reviewer.review('anything') }.to raise_error(described_class::ReviewError, /could not parse/)
     end
 
     it 'raises when the model invents a status' do
-      stub_response(Net::HTTPOK, message_payload('{"status":"maybe"}'))
+      stub_reply('{"status":"maybe","notes":""}')
 
       expect { reviewer.review('anything') }.to raise_error(described_class::ReviewError, /unknown status/)
     end
 
-    it 'refuses to build without a key' do
+    it 'lets API errors through for the screener to handle' do
+      allow(messages).to receive(:create).and_raise(Anthropic::Errors::APIConnectionError.new(url: nil))
+
+      expect { reviewer.review('anything') }.to raise_error(Anthropic::Errors::APIConnectionError)
+    end
+
+    it 'refuses to build without a key or a client' do
       expect { described_class.new(api_key: nil) }.to raise_error(described_class::ReviewError, /ANTHROPIC_API_KEY/)
     end
   end
