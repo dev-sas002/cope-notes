@@ -1,0 +1,17 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Container healthcheck for the web process. Uses Ruby rather than curl so the
+# runtime image does not have to carry an HTTP client.
+require 'net/http'
+
+url = URI(ENV.fetch('HEALTHCHECK_URL', "http://127.0.0.1:#{ENV.fetch('PORT', '3000')}/up"))
+
+begin
+  response = Net::HTTP.start(url.host, url.port, open_timeout: 3, read_timeout: 3) do |http|
+    http.get(url.path)
+  end
+  exit(response.is_a?(Net::HTTPSuccess) ? 0 : 1)
+rescue StandardError
+  exit 1
+end

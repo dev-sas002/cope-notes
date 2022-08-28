@@ -1,0 +1,15 @@
+# frozen_string_literal: true
+
+# Lint tooling lives in its own bundle so RuboCop and its plugins never enter
+# the application's dependency graph: the deployed image installs exactly the
+# gems in Gemfile.lock and nothing else, and a RuboCop upgrade can never move a
+# runtime gem.
+#
+#   bin/lint          # check
+#   bin/lint -A       # autocorrect
+#
+source 'https://rubygems.org'
+
+gem 'rubocop', '~> 1.69.0'
+gem 'rubocop-rails', '~> 2.29'
+gem 'rubocop-rspec', '~> 3.4'
