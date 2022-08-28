@@ -16,11 +16,10 @@ if [ "${PREPARE_DATABASE:-false}" = "true" ]; then
     echo "==> rails db:prepare"
     bundle exec rails db:prepare
 
-    # db:prepare only seeds a database it created itself, and the Postgres image
-    # creates cope_notes_development from POSTGRES_DB before Rails ever
-    # connects, so it never takes that branch here. db/seeds.rb is idempotent,
-    # so seeding every boot is both safe and the only thing that guarantees a
-    # first boot has notes to send.
+    # db:prepare seeds only when it has just loaded the schema into an empty
+    # database, so a container restarted on an existing volume would skip it.
+    # db/seeds.rb is idempotent (spec/db/seeds_spec.rb), so seeding on every
+    # boot is safe and guarantees a first boot has notes to send.
     echo "==> rails db:seed"
     bundle exec rails db:seed
   fi
