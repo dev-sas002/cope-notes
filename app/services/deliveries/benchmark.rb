@@ -105,13 +105,13 @@ module Deliveries
       connection.execute("EXPLAIN (ANALYZE, BUFFERS) #{sql}").each { |row| say "  #{row['QUERY PLAN']}" }
     end
 
-    def measure(label, &block)
+    def measure(label, &)
       GC.start
       objects_before = GC.stat[:total_allocated_objects]
-      elapsed = time(&block)
+      elapsed = time(&)
       allocated = GC.stat[:total_allocated_objects] - objects_before
       say format('  %<label>-62s %<elapsed>8.1f ms  %<allocated>12s objects',
-                 label: label, elapsed: elapsed * 1_000, allocated: allocated.to_s(:delimited))
+                 label: label, elapsed: elapsed * 1_000, allocated: ActiveSupport::NumberHelper.number_to_delimited(allocated))
     end
 
     def time(&block)

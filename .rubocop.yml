@@ -1,10 +1,10 @@
-require:
+plugins:
   - rubocop-rails
   - rubocop-rspec
 
 AllCops:
-  TargetRubyVersion: 3.0
-  TargetRailsVersion: 6.1
+  TargetRubyVersion: 3.4
+  TargetRailsVersion: 8.1
   NewCops: enable
   SuggestExtensions: false
   Exclude:
@@ -12,7 +12,6 @@ AllCops:
     - 'bin/**/*'
     - 'config/**/*'
     - 'db/schema.rb'
-    - 'node_modules/**/*'
     - 'vendor/**/*'
     - 'project_venv/**/*'
     - 'tmp/**/*'
@@ -75,17 +74,18 @@ Rails/SkipsModelValidations:
     - 'db/migrate/**/*'
 
 # The API predates this config and `is_active` is part of its public contract.
-Naming/PredicateName:
+Naming/PredicatePrefix:
   Enabled: false
+
+# claim_delivery_slot answers "did this caller win the slot?", but it is a
+# command with a side effect first; a `?` would suggest it is safe to call twice.
+Naming/PredicateMethod:
+  AllowedMethods:
+    - claim_delivery_slot
 
 # Single-locale product; a subject line in the mailer is clearer than a lookup key.
 Rails/I18nLocaleTexts:
   Enabled: false
-
-# base_controller defines the shared filters; the actions live in its subclasses.
-Rails/LexicallyScopedActionFilter:
-  Exclude:
-    - 'app/controllers/api/v1/base_controller.rb'
 
 # Fixed forward by 20260923090000_add_delivery_tracking_and_indexes.
 Rails/ThreeStateBooleanColumn:

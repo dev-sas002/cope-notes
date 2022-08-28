@@ -15,7 +15,8 @@ module Deliveries
   # Raised by a channel when the note was definitely **not** handed to the
   # provider - a refused connection, a timeout before the payload was accepted.
   # The claim is released so the same note is retried on the next tick.
-  TransientError = Class.new(StandardError)
+  class TransientError < StandardError
+  end
 
   DEFAULT_BATCH_SIZE = 1_000
   DEFAULT_INTERVAL_MINUTES = 1

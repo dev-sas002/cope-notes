@@ -25,12 +25,12 @@ SUBSCRIBERS = [
   { name: 'Katherine Johnson', email: 'katherine@example.com', is_active: false }
 ].freeze
 
-if Message.count.zero?
+unless Message.exists?
   NOTES.each { |text| Message.create!(text: text) }
   Rails.logger.info("[seeds] created #{NOTES.size} notes")
 end
 
-if Subscriber.count.zero?
+unless Subscriber.exists?
   SUBSCRIBERS.each { |attributes| Subscriber.create!(**attributes) }
   Rails.logger.info("[seeds] created #{SUBSCRIBERS.size} subscribers")
 end

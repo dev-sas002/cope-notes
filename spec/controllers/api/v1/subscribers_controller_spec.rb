@@ -115,7 +115,7 @@ RSpec.describe Api::V1::SubscribersController, type: :controller do
 
       expect { post :create, params: { subscriber: { name: 'example', email: 'nope' } } }
         .not_to change { Subscriber.count }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
       expect(response.parsed_body).to have_key('email')
     end
 
@@ -125,7 +125,7 @@ RSpec.describe Api::V1::SubscribersController, type: :controller do
 
       expect { post :create, params: { subscriber: { name: 'copy', email: existing.email.upcase } } }
         .not_to change { Subscriber.count }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
 
     it 'returns bad request when the subscriber key is missing' do

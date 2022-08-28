@@ -17,5 +17,6 @@ Rails.application.routes.draw do
     end
   end
 
-  get '/up', to: proc { [200, { 'Content-Type' => 'text/plain' }, ['ok']] }
+  # 200 when the app boots without raising, 500 otherwise; used by the healthcheck.
+  get 'up', to: 'rails/health#show', as: :rails_health_check
 end

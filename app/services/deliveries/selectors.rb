@@ -8,7 +8,8 @@ module Deliveries
   # an engagement-driven or personalised strategy can be dropped in without
   # touching the delivery path. `NOTE_SELECTION_STRATEGY` picks the one in use.
   module Selectors
-    UnknownStrategy = Class.new(StandardError)
+    class UnknownStrategy < StandardError
+    end
 
     @registry = {}
 

@@ -12,7 +12,8 @@ module Deliveries
   # Nothing above the channel - not the job, not the selection strategy, not the
   # delivery service - has to change. `DELIVERY_CHANNEL` picks the one in use.
   module Channels
-    UnknownChannel = Class.new(StandardError)
+    class UnknownChannel < StandardError
+    end
 
     @registry = {}
 

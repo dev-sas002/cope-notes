@@ -22,7 +22,7 @@ module Api
         if Notes::SaveNote.call(message, message_params)
           render json: message, serializer: MessageSerializer, status: :created
         else
-          render json: message.errors, status: :unprocessable_entity
+          render json: message.errors, status: :unprocessable_content
         end
       end
 
@@ -31,7 +31,7 @@ module Api
         if Notes::SaveNote.call(@message, message_params)
           render json: @message, serializer: MessageSerializer
         else
-          render json: @message.errors, status: :unprocessable_entity
+          render json: @message.errors, status: :unprocessable_content
         end
       end
 
@@ -55,11 +55,11 @@ module Api
       end
 
       def set_message
-        @message = Message.includes(:subscribers).find(params[:id])
+        @message = Message.includes(:subscribers).find(params.expect(:id))
       end
 
       def message_params
-        params.require(:message).permit(:text)
+        params.expect(message: [:text])
       end
     end
   end

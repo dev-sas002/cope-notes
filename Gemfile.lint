@@ -10,6 +10,6 @@
 #
 source 'https://rubygems.org'
 
-gem 'rubocop', '~> 1.69.0'
-gem 'rubocop-rails', '~> 2.29'
-gem 'rubocop-rspec', '~> 3.4'
+gem 'rubocop', '~> 1.80'
+gem 'rubocop-rails', '~> 2.33'
+gem 'rubocop-rspec', '~> 3.7'

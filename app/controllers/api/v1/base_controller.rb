@@ -2,9 +2,9 @@
 
 module Api
   module V1
-    class BaseController < ApplicationController
-      skip_before_action :verify_authenticity_token, only: %i[create update destroy]
-
+    # JSON only: no sessions, cookies or CSRF tokens, so it derives from
+    # ActionController::API rather than the HTML ApplicationController.
+    class BaseController < ActionController::API
       rescue_from ActiveRecord::RecordNotFound, with: :render_not_found
       rescue_from ActionController::ParameterMissing, with: :render_bad_request
 

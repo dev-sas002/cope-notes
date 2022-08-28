@@ -4,8 +4,11 @@
 :queues:
   - [deliveries, 5]
   - [default, 1]
-:schedule:
-  dispatch_deliveries:
-    cron: '0 * * * * *'   # every minute
-    class: DispatchDeliveriesJob
-    queue: default
+# sidekiq-scheduler 5+ only reads the schedule from under `:scheduler:`; at the
+# top level it is silently ignored and nothing is ever dispatched.
+:scheduler:
+  :schedule:
+    dispatch_deliveries:
+      cron: '0 * * * * *'   # every minute
+      class: DispatchDeliveriesJob
+      queue: default

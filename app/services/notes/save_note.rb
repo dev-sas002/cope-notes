@@ -7,8 +7,8 @@ module Notes
   # renders, and the rule "text that changes is re-screened before it is stored"
   # lives somewhere it can be unit tested without a request.
   class SaveNote
-    def self.call(note, attributes, **options)
-      new(note, attributes, **options).call
+    def self.call(note, attributes, **)
+      new(note, attributes, **).call
     end
 
     def initialize(note, attributes, screener: Moderation::Screener.new)

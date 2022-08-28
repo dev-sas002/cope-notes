@@ -9,8 +9,8 @@ module Moderation
   # a worse outcome than letting a note reach a human editor, and the `flagged`
   # status exists so nothing slips by unnoticed.
   class Screener
-    def self.call(text, **options)
-      new(**options).call(text)
+    def self.call(text, **)
+      new(**).call(text)
     end
 
     def initialize(reviewer: Moderation.default_reviewer, fallback: HeuristicReviewer.new)

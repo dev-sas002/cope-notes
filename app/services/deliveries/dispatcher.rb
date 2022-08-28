@@ -17,8 +17,8 @@ module Deliveries
   # due set costs, not what the table costs, and memory is capped at `batch_size`
   # ids no matter how large the table grows.
   class Dispatcher
-    def self.call(**options)
-      new(**options).call
+    def self.call(**)
+      new(**).call
     end
 
     def initialize(now: Time.current, batch_size: Deliveries.batch_size, spread_seconds: Deliveries.spread_seconds)

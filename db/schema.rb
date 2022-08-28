@@ -10,15 +10,14 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 2026_09_23_090000) do
-
+ActiveRecord::Schema[8.1].define(version: 2026_09_23_090000) do
   # These are extensions that must be enabled in order to support this database
-  enable_extension "plpgsql"
+  enable_extension "pg_catalog.plpgsql"
 
   create_table "messages", force: :cascade do |t|
     t.string "text", limit: 500, null: false
-    t.datetime "created_at", precision: 6, null: false
-    t.datetime "updated_at", precision: 6, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
     t.string "review_status", default: "approved", null: false
     t.string "review_notes", limit: 255
     t.datetime "reviewed_at"
@@ -29,8 +28,8 @@ ActiveRecord::Schema.define(version: 2026_09_23_090000) do
   create_table "subscriber_emails", force: :cascade do |t|
     t.bigint "subscriber_id"
     t.bigint "message_id"
-    t.datetime "created_at", precision: 6, null: false
-    t.datetime "updated_at", precision: 6, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
     t.string "status", default: "claimed", null: false
     t.string "channel", default: "email", null: false
     t.datetime "delivered_at"
@@ -46,11 +45,10 @@ ActiveRecord::Schema.define(version: 2026_09_23_090000) do
     t.string "email", limit: 50, null: false
     t.string "name", limit: 50, null: false
     t.boolean "is_active", default: true, null: false
-    t.datetime "created_at", precision: 6, null: false
-    t.datetime "updated_at", precision: 6, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
     t.datetime "last_delivered_at"
     t.index ["email"], name: "index_subscribers_on_email", unique: true
     t.index ["last_delivered_at", "id"], name: "index_subscribers_due_for_delivery", where: "is_active"
   end
-
 end

@@ -107,7 +107,7 @@ RSpec.describe Api::V1::MessagesController, type: :controller do
 
       expect { post :create, params: { message: { text: '' } } }
         .not_to change { Message.count }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
       expect(response.parsed_body).to have_key('text')
     end
 
@@ -115,7 +115,7 @@ RSpec.describe Api::V1::MessagesController, type: :controller do
       request.headers.merge!(default_headers)
 
       post :create, params: { message: { text: 'a' * 501 } }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
 
     it 'returns bad request when the message key is missing' do
@@ -155,7 +155,7 @@ RSpec.describe Api::V1::MessagesController, type: :controller do
 
       get :index, params: { review_status: Message::FLAGGED }
 
-      expect(response.parsed_body.map { |note| note['id'] }).to eq([flagged.id])
+      expect(response.parsed_body.pluck('id')).to eq([flagged.id])
     end
 
     it 'ignores an unknown review status instead of returning nothing' do
@@ -174,7 +174,7 @@ RSpec.describe Api::V1::MessagesController, type: :controller do
 
       expect { patch :update, params: { id: message.id, message: { text: '' } } }
         .not_to change { message.reload.text }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
   end
 

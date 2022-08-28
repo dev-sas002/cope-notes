@@ -39,10 +39,9 @@ RSpec.describe Deliveries::Channels do
       note = create(:message)
       # Action Mailer builds the delivery object internally, so there is no seam
       # to inject here - any_instance is the only way to simulate a dead SMTP host.
-      # rubocop:disable RSpec/AnyInstance
+      # rubocop:disable-next RSpec/AnyInstance
       allow_any_instance_of(ActionMailer::MessageDelivery)
         .to receive(:deliver_now).and_raise(Errno::ECONNREFUSED)
-      # rubocop:enable RSpec/AnyInstance
 
       expect { described_class.new.deliver(subscriber: subscriber, note: note) }
         .to raise_error(Deliveries::TransientError, /ECONNREFUSED/)

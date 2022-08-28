@@ -22,7 +22,7 @@ module Api
         if @subscriber.save
           render json: @subscriber, serializer: SubscriberSerializer, status: :created
         else
-          render json: @subscriber.errors, status: :unprocessable_entity
+          render json: @subscriber.errors, status: :unprocessable_content
         end
       end
 
@@ -31,7 +31,7 @@ module Api
         if @subscriber.change_status
           render json: @subscriber, serializer: SubscriberSerializer
         else
-          render json: @subscriber.errors, status: :unprocessable_entity
+          render json: @subscriber.errors, status: :unprocessable_content
         end
       end
 
@@ -40,18 +40,18 @@ module Api
         if @subscriber.destroy
           head :no_content
         else
-          render json: @subscriber.errors, status: :unprocessable_entity
+          render json: @subscriber.errors, status: :unprocessable_content
         end
       end
 
       private
 
       def set_subscriber
-        @subscriber = Subscriber.includes(:messages).find(params[:id])
+        @subscriber = Subscriber.includes(:messages).find(params.expect(:id))
       end
 
       def subscriber_params
-        params.require(:subscriber).permit(:email, :name)
+        params.expect(subscriber: %i[email name])
       end
     end
   end

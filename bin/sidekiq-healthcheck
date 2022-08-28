@@ -13,7 +13,7 @@ require 'sidekiq'
 require 'sidekiq/api'
 
 Sidekiq.configure_client do |config|
-  config.redis = { url: ENV.fetch('REDIS_URL', 'redis://127.0.0.1:6379/0'), network_timeout: 5 }
+  config.redis = { url: ENV.fetch('REDIS_URL', 'redis://127.0.0.1:6379/0'), timeout: 5 }
 end
 
 exit(Sidekiq::ProcessSet.new.size.positive? ? 0 : 1)

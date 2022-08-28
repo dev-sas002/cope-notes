@@ -1,12 +1,14 @@
-url = ENV['REDIS_URL'] || 'redis://127.0.0.1:6379/0'
-connection = proc { Redis.new(url: url) }
+# frozen_string_literal: true
+
+redis_url = ENV.fetch('REDIS_URL', 'redis://127.0.0.1:6379/0')
 
 Sidekiq.configure_server do |config|
-  config.redis = { url: url, network_timeout: 10 }
+  config.redis = { url: redis_url, timeout: 10 }
 end
 
+# Web and console processes only ever enqueue, so a small pool is plenty.
 Sidekiq.configure_client do |config|
-  config.redis = ConnectionPool.new(size: 2, &connection)
+  config.redis = { url: redis_url, size: 2 }
 end
 
 # The Sidekiq dashboard mounted at /sidekiq exposes (and can manipulate) job

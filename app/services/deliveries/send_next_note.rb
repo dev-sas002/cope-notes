@@ -29,8 +29,8 @@ module Deliveries
   # next time. For a product whose notes are interchangeable, losing one note is
   # strictly better than sending a duplicate.
   class SendNextNote
-    def self.call(subscriber, **options)
-      new(subscriber, **options).call
+    def self.call(subscriber, **)
+      new(subscriber, **).call
     end
 
     def initialize(subscriber, selector: Selectors.fetch, channel: Channels.fetch, clock: Time)
