@@ -25,6 +25,21 @@ RSpec.describe Deliveries::Stats do
     expect(described_class.call[:subscribers][:exhausted]).to eq(1)
   end
 
+  it 'counts a subscriber whose only remaining note failed as exhausted' do
+    subscriber = create(:subscriber, is_active: true)
+    create(:subscriber_email, :failed, subscriber: subscriber, message: create(:message))
+
+    expect(described_class.call[:subscribers][:exhausted]).to eq(1)
+  end
+
+  it 'does not count a delivered note that was later rejected as one of the remaining notes' do
+    subscriber = create(:subscriber, is_active: true)
+    create(:subscriber_email, subscriber: subscriber, message: create(:message, :rejected))
+    create(:message)
+
+    expect(described_class.call[:subscribers][:exhausted]).to eq(0)
+  end
+
   it 'reports zero deliveries and no exhausted subscribers on an empty install' do
     stats = described_class.call
 

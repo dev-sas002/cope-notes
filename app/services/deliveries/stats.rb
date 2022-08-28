@@ -57,19 +57,25 @@ module Deliveries
       }
     end
 
-    # Active subscribers who have already received every deliverable note, and
-    # so will never be sent anything again until new notes are written.
+    # Active subscribers for whom no deliverable note is left, so they will not
+    # be sent anything again until new notes are written. "Left" means exactly
+    # what the selectors mean: a deliverable note with no delivery row of any
+    # status for this subscriber. Counting delivered rows instead would miss
+    # subscribers whose remaining notes all failed, and would count a note that
+    # was delivered and later rejected as if it were still in circulation.
     def exhausted_subscribers
-      deliverable = Message.deliverable.count
-      return 0 if deliverable.zero?
+      return 0 unless Message.deliverable.exists?
 
-      Subscriber.active
-                .joins(:subscriber_emails)
-                .where(subscriber_emails: { status: SubscriberEmail::DELIVERED })
-                .group('subscribers.id')
-                .having('COUNT(subscriber_emails.id) >= ?', deliverable)
-                .count
-                .size
+      Subscriber.active.where(<<~SQL.squish).count
+        NOT EXISTS (
+          SELECT 1 FROM messages
+          WHERE messages.review_status <> '#{Message::REJECTED}'
+            AND NOT EXISTS (
+              SELECT 1 FROM subscriber_emails se
+              WHERE se.message_id = messages.id AND se.subscriber_id = subscribers.id
+            )
+        )
+      SQL
     end
   end
 end
