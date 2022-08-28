@@ -50,6 +50,8 @@ services:
       DATABASE_USER: postgres
       REDIS_URL: redis://redis:6379/0
       MAILER_FROM_ADDRESS: notes@cope-notes.example
+      # Public address of the web service; unsubscribe links in mail point here.
+      APP_URL: http://localhost:8191
       # One note per subscriber per minute, matching the original behaviour.
       # Raise this for a realistic cadence (1440 = one a day).
       DELIVERY_INTERVAL_MINUTES: '1'

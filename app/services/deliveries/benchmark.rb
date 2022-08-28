@@ -134,8 +134,9 @@ module Deliveries
 
     def insert_subscribers!
       connection.execute(<<~SQL.squish)
-        INSERT INTO subscribers (email, name, is_active, last_delivered_at, created_at, updated_at)
-        SELECT 'bench' || i || '@example.com', 'Bench ' || i, TRUE, NULL, NOW(), NOW()
+        INSERT INTO subscribers (email, name, is_active, last_delivered_at, unsubscribe_token, created_at, updated_at)
+        SELECT 'bench' || i || '@example.com', 'Bench ' || i, TRUE, NULL,
+               replace(gen_random_uuid()::text, '-', ''), NOW(), NOW()
         FROM generate_series(1, #{subscribers}) AS i
       SQL
     end

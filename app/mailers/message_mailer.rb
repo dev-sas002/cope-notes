@@ -9,6 +9,13 @@ class MessageMailer < ApplicationMailer
   def new_message_email
     @subscriber = params[:subscriber]
     @message = params[:message]
+    @unsubscribe_url = unsubscribe_url(@subscriber.unsubscribe_token)
+
+    # RFC 2369 / RFC 8058: lets the mail client offer its own "Unsubscribe"
+    # button, which POSTs straight to the same endpoint the footer link opens.
+    headers['List-Unsubscribe'] = "<#{@unsubscribe_url}>"
+    headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
+
     mail(to: @subscriber.email, subject: SUBJECT)
   end
 end

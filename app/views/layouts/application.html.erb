@@ -3,9 +3,90 @@
   <head>
     <title><%= content_for(:title) || 'Cope Notes' %></title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="robots" content="noindex">
+    <meta name="color-scheme" content="light">
     <%= csrf_meta_tags %>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Fraunces:opsz,wght@9..144,500&display=swap">
+    <%#
+      The only HTML pages this app serves are the three unsubscribe states, so
+      the styles live here rather than behind an asset pipeline.
+    %>
+    <style>
+      :root {
+        --paper: #f6f2ea;
+        --card: #fffdf9;
+        --ink: #2b2620;
+        --muted: #6b645a;
+        --line: #e3dccf;
+        --sage: #4f6f5b;
+        --sage-dark: #3c5646;
+        --focus: #b5651d;
+        --serif: 'Fraunces', Georgia, 'Times New Roman', serif;
+        --sans: 'Atkinson Hyperlegible', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 16px;
+        background: var(--paper);
+        color: var(--ink);
+        font: 18px/1.6 var(--sans);
+      }
+      main {
+        width: 100%;
+        max-width: 34rem;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: clamp(24px, 6vw, 48px);
+      }
+      .eyebrow {
+        margin: 0 0 20px;
+        font-size: 0.8rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--sage);
+        font-weight: 700;
+      }
+      h1 {
+        margin: 0 0 16px;
+        font: 500 clamp(1.6rem, 5vw, 2.1rem)/1.25 var(--serif);
+      }
+      p { margin: 0 0 16px; }
+      .quiet { color: var(--muted); font-size: 0.95rem; }
+      form { margin: 28px 0 20px; }
+      button {
+        appearance: none;
+        width: 100%;
+        min-height: 48px;
+        padding: 12px 24px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--sage);
+        color: #fff;
+        font: 700 1rem/1.2 var(--sans);
+        cursor: pointer;
+      }
+      button:hover { background: var(--sage-dark); }
+      button:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+      a { color: var(--sage-dark); }
+      footer { margin-top: 24px; font-size: 0.85rem; color: var(--muted); }
+      @media (min-width: 640px) { button { width: auto; } }
+    </style>
   </head>
   <body>
-    <%= yield %>
+    <main>
+      <p class="eyebrow">Cope Notes</p>
+      <%= yield %>
+    </main>
+    <footer>One note, once in a while.</footer>
   </body>
 </html>

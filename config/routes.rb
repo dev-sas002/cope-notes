@@ -17,6 +17,9 @@ Rails.application.routes.draw do
     end
   end
 
+  get 'unsubscribe/:token', to: 'unsubscribes#show', as: :unsubscribe
+  post 'unsubscribe/:token', to: 'unsubscribes#create'
+
   # 200 when the app boots without raising, 500 otherwise; used by the healthcheck.
   get 'up', to: 'rails/health#show', as: :rails_health_check
 end

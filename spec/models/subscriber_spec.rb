@@ -21,6 +21,10 @@ RSpec.describe Subscriber, type: :model do
       expect(build(:subscriber, email: 'not-an-email')).not_to be_valid
     end
 
+    it 'is given an unsubscribe token on creation' do
+      expect(subscriber.unsubscribe_token).to be_present
+    end
+
     it 'defaults to active' do
       expect(subscriber.is_active).to be(true)
     end

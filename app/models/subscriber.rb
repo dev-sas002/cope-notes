@@ -6,6 +6,11 @@ class Subscriber < ApplicationRecord
   has_many :subscriber_emails, dependent: :destroy
   has_many :messages, through: :subscriber_emails
 
+  # The credential behind the unsubscribe link in every note. Random and stored
+  # rather than signed, so it does not depend on the secret_key_base of whichever
+  # process rendered the email, and a leaked link can be revoked by regenerating it.
+  has_secure_token :unsubscribe_token
+
   validates :is_active, inclusion: { in: [true, false] }
   validates :name, presence: true, length: { maximum: 50 }
   validates :email, presence: true, length: { maximum: 50 },
@@ -45,7 +50,7 @@ class Subscriber < ApplicationRecord
     # rubocop:enable Rails/SkipsModelValidations
   end
 
-  # Flips the subscription on or off. `update!` rather than `toggle!` so the
+  # Flips the subscription on or off. `update` rather than `toggle!` so the
   # record is still validated on the way through.
   def change_status
     update(is_active: !is_active)

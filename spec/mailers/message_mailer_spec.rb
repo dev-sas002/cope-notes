@@ -27,6 +27,18 @@ RSpec.describe MessageMailer, type: :mailer do
       expect(mail.text_part.body.to_s).to include('Hi Robin,')
     end
 
+    it 'links to the unsubscribe page in both parts' do
+      url = "http://www.example.com/unsubscribe/#{subscriber.unsubscribe_token}"
+
+      expect(mail.html_part.body.to_s).to include(url)
+      expect(mail.text_part.body.to_s).to include(url)
+    end
+
+    it 'offers one-click unsubscribe to the mail client' do
+      expect(mail['List-Unsubscribe'].value).to eq("<http://www.example.com/unsubscribe/#{subscriber.unsubscribe_token}>")
+      expect(mail['List-Unsubscribe-Post'].value).to eq('List-Unsubscribe=One-Click')
+    end
+
     it 'renders exactly one HTML document, not a layout wrapped around another' do
       expect(mail.html_part.body.to_s.scan('<html').size).to eq(1)
     end

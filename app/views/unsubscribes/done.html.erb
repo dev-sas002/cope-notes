@@ -1,0 +1,10 @@
+<% content_for :title, 'Unsubscribed - Cope Notes' %>
+<h1 role="status">You are unsubscribed</h1>
+<p>
+  We will not send any more notes to
+  <strong><%= masked_email(@subscriber.email) %></strong>.
+</p>
+<p class="quiet">
+  Thank you for letting us keep you company for a while. If things feel heavy
+  right now, please reach out to someone you trust or a local support line.
+</p>

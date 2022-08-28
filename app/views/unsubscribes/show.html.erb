@@ -1,0 +1,18 @@
+<% content_for :title, 'Unsubscribe - Cope Notes' %>
+<% if @subscriber.is_active %>
+  <h1>Stop receiving notes?</h1>
+  <p>
+    Notes for <strong><%= masked_email(@subscriber.email) %></strong> will stop
+    straight away. You can always be added again later.
+  </p>
+  <%= form_with url: unsubscribe_path(@subscriber.unsubscribe_token), method: :post do %>
+    <button type="submit">Unsubscribe</button>
+  <% end %>
+  <p class="quiet">Changed your mind? Close this page and nothing changes.</p>
+<% else %>
+  <h1>You are already unsubscribed</h1>
+  <p>
+    <strong><%= masked_email(@subscriber.email) %></strong> is not on the list,
+    so no more notes are on their way.
+  </p>
+<% end %>

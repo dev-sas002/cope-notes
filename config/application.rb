@@ -22,5 +22,9 @@ module CopeNotes
 
     config.active_job.queue_adapter = :sidekiq
 
+    # Where links in outgoing mail point. The worker renders the email, so it
+    # needs the public address of the web process, not its own.
+    app_url = URI(ENV.fetch('APP_URL', 'http://localhost:3000'))
+    config.action_mailer.default_url_options = { protocol: app_url.scheme, host: app_url.host, port: app_url.port }
   end
 end
