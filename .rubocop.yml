@@ -1,0 +1,123 @@
+require:
+  - rubocop-rails
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 3.0
+  TargetRailsVersion: 6.1
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    # Rails-generated scaffolding that is configuration, not application code.
+    - 'bin/**/*'
+    - 'config/**/*'
+    - 'db/schema.rb'
+    - 'node_modules/**/*'
+    - 'vendor/**/*'
+    - 'project_venv/**/*'
+    - 'tmp/**/*'
+    - 'log/**/*'
+    - 'public/**/*'
+    - 'Rakefile'
+    - 'config.ru'
+    # The Gemfile is a dependency manifest, and its contents are pinned by
+    # Gemfile.lock; style cops on it would only ever produce churn.
+    - 'Gemfile'
+
+# Documentation lives where it explains a decision, not as a mandatory banner on
+# every class.
+Style/Documentation:
+  Enabled: false
+
+Style/FrozenStringLiteralComment:
+  Exclude:
+    - 'spec/**/*'
+
+Layout/LineLength:
+  Max: 120
+
+Metrics/BlockLength:
+  Exclude:
+    - 'spec/**/*'
+    - 'db/migrate/**/*'
+    # A rake namespace is one long block by construction.
+    - 'lib/tasks/**/*'
+
+Metrics/AbcSize:
+  Max: 20
+
+Metrics/ClassLength:
+  Exclude:
+    - 'db/migrate/**/*'
+    # A benchmark harness is mostly fixture SQL and formatting; splitting it up
+    # would scatter one linear script across several files.
+    - 'app/services/deliveries/benchmark.rb'
+
+# Migrations are a linear script; splitting them up hurts readability.
+Metrics/MethodLength:
+  Max: 20
+  Exclude:
+    - 'db/migrate/**/*'
+
+Rails/Output:
+  Exclude:
+    - 'db/seeds.rb'
+    # Both of these are run from a terminal and report to it; their output is
+    # the deliverable, not a log line.
+    - 'app/services/deliveries/benchmark.rb'
+    - 'lib/tasks/**/*'
+
+# update_columns is used deliberately in the delivery path: confirming a claim
+# must not fire validations or callbacks, and must be a single UPDATE.
+Rails/SkipsModelValidations:
+  Exclude:
+    - 'app/services/deliveries/**/*'
+    - 'db/migrate/**/*'
+
+# The API predates this config and `is_active` is part of its public contract.
+Naming/PredicateName:
+  Enabled: false
+
+# Single-locale product; a subject line in the mailer is clearer than a lookup key.
+Rails/I18nLocaleTexts:
+  Enabled: false
+
+# base_controller defines the shared filters; the actions live in its subclasses.
+Rails/LexicallyScopedActionFilter:
+  Exclude:
+    - 'app/controllers/api/v1/base_controller.rb'
+
+# Fixed forward by 20260923090000_add_delivery_tracking_and_indexes.
+Rails/ThreeStateBooleanColumn:
+  Exclude:
+    - 'db/migrate/20220829141020_create_subscribers.rb'
+
+# The Gemfile is grouped by purpose with comments, not alphabetised.
+Bundler/OrderedGems:
+  Enabled: false
+
+Lint/AmbiguousBlockAssociation:
+  AllowedMethods:
+    - change
+    - not_change
+
+# `expect { ... }.to change { Model.count }` reads better than the receiver form
+# and is what the existing suite uses throughout.
+RSpec/ExpectChange:
+  EnforcedStyle: block
+
+RSpec/ExampleLength:
+  Max: 18
+
+RSpec/MultipleExpectations:
+  Max: 8
+
+RSpec/NestedGroups:
+  Max: 4
+
+RSpec/MessageSpies:
+  Enabled: false
+
+# `should` style one-liners are how the shoulda-matchers specs read.
+RSpec/NamedSubject:
+  Enabled: false
