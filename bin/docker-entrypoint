@@ -1,0 +1,29 @@
+#!/bin/bash
+# Prepares the database, then hands over to whatever the container was asked to
+# run. Set PREPARE_DATABASE=false on containers that should not touch the schema
+# (the Sidekiq worker waits for the web container instead).
+set -euo pipefail
+
+rm -f tmp/pids/server.pid
+
+if [ "${PREPARE_DATABASE:-false}" = "true" ]; then
+  if [ "${RAILS_ENV:-development}" = "test" ]; then
+    # Purges and reloads the schema, and deliberately does not seed: the suite
+    # builds the rows each example needs and counts them.
+    echo "==> rails db:test:prepare"
+    bundle exec rails db:test:prepare
+  else
+    echo "==> rails db:prepare"
+    bundle exec rails db:prepare
+
+    # db:prepare only seeds a database it created itself, and the Postgres image
+    # creates cope_notes_development from POSTGRES_DB before Rails ever
+    # connects, so it never takes that branch here. db/seeds.rb is idempotent,
+    # so seeding every boot is both safe and the only thing that guarantees a
+    # first boot has notes to send.
+    echo "==> rails db:seed"
+    bundle exec rails db:seed
+  fi
+fi
+
+exec "$@"
