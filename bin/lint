@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Runs RuboCop from the separate lint bundle (see Gemfile.lint).
+#
+#   bin/lint          # check every file
+#   bin/lint -A       # autocorrect, including unsafe corrections
+#   bin/lint app/     # check one path
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+export BUNDLE_GEMFILE="${BUNDLE_GEMFILE:-Gemfile.lint}"
+
+if ! bundle check >/dev/null 2>&1; then
+  echo "==> installing the lint bundle (Gemfile.lint)"
+  bundle install
+fi
+
+exec bundle exec rubocop "$@"
