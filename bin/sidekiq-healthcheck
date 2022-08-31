@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Healthy means "this Sidekiq process has a live heartbeat in Redis", which is
+# what actually matters: a worker that is running but cannot reach Redis will
+# never pick a job up.
+#
+# bundler/setup first: gems live under BUNDLE_PATH, which is not on the default
+# RubyGems search path, so a bare `require 'sidekiq'` here would fail and the
+# container would report itself unhealthy forever.
+require 'bundler/setup'
+require 'sidekiq'
+require 'sidekiq/api'
+
+Sidekiq.configure_client do |config|
+  config.redis = { url: ENV.fetch('REDIS_URL', 'redis://127.0.0.1:6379/0'), network_timeout: 5 }
+end
+
+exit(Sidekiq::ProcessSet.new.size.positive? ? 0 : 1)
