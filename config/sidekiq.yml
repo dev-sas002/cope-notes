@@ -1,0 +1,11 @@
+# Delivery jobs get their own queue and the bulk of the weighting, so a backlog
+# of sends can never starve the once-a-minute dispatcher that creates them.
+:concurrency: <%= ENV.fetch('SIDEKIQ_CONCURRENCY', 10) %>
+:queues:
+  - [deliveries, 5]
+  - [default, 1]
+:schedule:
+  dispatch_deliveries:
+    cron: '0 * * * * *'   # every minute
+    class: DispatchDeliveriesJob
+    queue: default
