@@ -1,0 +1,36 @@
+# Version control and CI
+.git
+.github
+.gitignore
+.dockerignore
+
+# Build inputs that are not part of the image
+dockerfile
+docker-compose.yml
+Gemfile.lint
+Gemfile.lint.lock
+
+# Documentation and API collections
+README.md
+docs
+postman
+
+# Dependency trees and virtualenvs restored inside the image, or not Ruby at all
+node_modules
+project_venv
+vendor/bundle
+
+# Build and run artefacts
+tmp
+log
+coverage
+public/packs
+public/packs-test
+public/assets
+*.log
+*.sqlite3
+
+# Never bake secrets into an image
+.env
+.env.*
+config/master.key

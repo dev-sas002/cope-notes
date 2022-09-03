@@ -1,0 +1,100 @@
+# One command brings up Postgres, Redis, the API and the Sidekiq worker with the
+# database created, migrated and seeded:
+#
+#     docker compose up --build
+#
+# Nothing is emailed unless the `worker` service is running - the schedule lives
+# inside the Sidekiq process, not the web process.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: cope_notes_development
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - '8192:5432'
+    volumes:
+      - db:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - redis:/data
+
+  web:
+    build:
+      context: .
+      # Tracked in git as a lowercase `dockerfile`, so it must be named
+      # explicitly - Docker's default lookup is for `Dockerfile`.
+      dockerfile: dockerfile
+      target: runtime
+    x-app-env: &app_env
+      RAILS_ENV: development
+      DATABASE_HOST: db
+      DATABASE_PORT: '5432'
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: password
+      REDIS_URL: redis://redis:6379/0
+      MAILER_FROM_ADDRESS: notes@cope-notes.example
+      # One note per subscriber per minute, matching the original behaviour.
+      # Raise this for a realistic cadence (1440 = one a day).
+      DELIVERY_INTERVAL_MINUTES: '1'
+      DELIVERY_CHANNEL: email
+      NOTE_SELECTION_STRATEGY: random_unsent
+    # Only the web container touches the schema, so the two never race.
+    environment:
+      <<: *app_env
+      PREPARE_DATABASE: 'true'
+    command: ['bundle', 'exec', 'puma', '-C', 'config/puma.rb']
+    # The worker is the process that actually sends, and letter_opener writes
+    # each message to disk. Sharing that directory is what makes /letter_opener
+    # in the web container show the notes the worker sent.
+    volumes:
+      - letters:/app/tmp/letter_opener
+    ports:
+      - '8191:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      # Tracked in git as a lowercase `dockerfile`, so it must be named
+      # explicitly - Docker's default lookup is for `Dockerfile`.
+      dockerfile: dockerfile
+      target: runtime
+    environment:
+      <<: *app_env
+    command: ['bundle', 'exec', 'sidekiq', '-C', 'config/sidekiq.yml']
+    volumes:
+      - letters:/app/tmp/letter_opener
+    healthcheck:
+      test: ['CMD', 'bin/sidekiq-healthcheck']
+      interval: 15s
+      timeout: 10s
+      start_period: 40s
+      retries: 5
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  db:
+  redis:
+  letters:
