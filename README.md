@@ -1,114 +1,65 @@
 # Cope Notes
 
-A Rails JSON API that emails short supportive notes to subscribers, one note at
-a time, on a schedule. Notes are written through the API and screened before
-they can be sent; a Sidekiq job wakes once a minute, works out who is due, and
-fans the sending out across the worker fleet. The whole product is that pipeline
-plus the API that feeds it - there are no application HTML pages.
+A Rails 6.1 JSON API and a Sidekiq worker that email one short supportive note
+to each subscriber on a schedule. Notes are written through the API and screened
+before they can be sent; once a minute a job works out who is due and fans the
+sending out across the worker fleet. There are no application HTML pages: the
+product is that pipeline plus the API feeding it.
 
-The interesting problem is not the emailing. It is the delivery guarantee: **no
-subscriber is ever sent the same note twice, one subscriber's failure never
-touches anybody else's, and what the database says was delivered is what was
-actually delivered.**
+The hard part is not the emailing. It is the delivery guarantee, and the rest of
+this page is how it is enforced and what it costs:
 
----
+> **No subscriber is ever sent the same note twice, one subscriber's failure
+> never touches anybody else's, and what the database says was delivered is what
+> was actually delivered.**
 
-## It working
-
-Full transcripts - boot, worker logs, request/response pairs, the benchmark and
-the test run - are in **[docs/captured-output.md](docs/captured-output.md)**.
-Two of them here:
-
-![A note delivered by the worker, seen in the development mail viewer](docs/screenshots/delivered-note.png)
-
-*A real send. The Sidekiq worker picked a note this subscriber had not received,
-recorded the claim, sent it, and confirmed the row.*
-
-![The Sidekiq worker with its two queues and thread pool](docs/screenshots/sidekiq-dashboard.png)
-
-*One worker process, ten threads, subscribed to `deliveries` and `default`.
-**Nothing is emailed unless this process is running** - the schedule lives in
-Sidekiq, not in the web process.*
-
-A tick, end to end:
+## Getting it to actually send
 
 ```console
-$ docker compose logs worker
-... INFO: Performing DispatchDeliveriesJob ... from Sidekiq(default)
-... INFO: [deliveries] dispatched 3 subscriber(s)
-... class=DeliverNoteJob jid=1b7bd351b5561da7b7a25fdd INFO: Delivered mail 6ab3c4e09be9b_144c018865@84a333afe935.mail (56.4ms)
-... class=DeliverNoteJob jid=0c0352f169d978b96a2d4b2b INFO: Delivered mail 6ab3c4e09cd47_144d419166@84a333afe935.mail (53.8ms)
-... class=DeliverNoteJob jid=ab1c789c77ce557b5642ac1e INFO: Delivered mail 6ab3c4e09cc13_144e81908b@84a333afe935.mail (49.8ms)
+$ docker compose up --build
 ```
 
-Three subscribers, three threads, three sends inside 320 ms. One tick later the
-dispatcher finds nobody due and does nothing.
+Postgres, Redis, the API on <http://localhost:8191> and the Sidekiq worker; the
+web container migrates and seeds on the way up, so ten notes and four
+subscribers (three active) are waiting. That stack has been built and booted —
+all four containers reported `(healthy)`, `/api/v1/deliveries/stats` returned
+live counts, and the cron delivered real mail. Host ports are in
+`docker-compose.yml`.
 
----
+> ### Nothing is emailed unless Sidekiq is running
+>
+> The schedule lives inside the Sidekiq process (`config/sidekiq.yml`), not in
+> Puma. Start only the web process and the API works perfectly, the database
+> fills with subscribers, and not one note is ever sent. Compose starts both;
+> locally, you start the worker yourself.
 
-## Architecture
+Without containers — Ruby 3.0.2 (see `.ruby-version`), PostgreSQL and Redis on
+the host:
 
-The shape is a thin adapter layer - HTTP controllers and Sidekiq jobs - wrapped
-around a `Deliveries` service namespace that knows nothing about either. Two
-registries sit underneath it: a **channel** decides how a note travels, a
-**selector** decides which note is chosen. Dependencies point inward; nothing in
-`app/services` references a controller, a job, or Sidekiq.
-
-```mermaid
-flowchart TB
-    subgraph adapters["Adapters — HTTP and queue"]
-        API["Api::V1 controllers<br/>parse, render, nothing else"]
-        DISPATCH["DispatchDeliveriesJob<br/>cron, every minute"]
-        DELIVER["DeliverNoteJob<br/>one per subscriber"]
-    end
-
-    subgraph domain["Domain — app/services"]
-        SAVE["Notes::SaveNote"]
-        SCREEN["Moderation::Screener"]
-        DISP["Deliveries::Dispatcher<br/>keyset pages of due ids"]
-        SEND["Deliveries::SendNextNote<br/>claim → send → confirm"]
-        STATS["Deliveries::Stats"]
-    end
-
-    subgraph seams["Seams — swap without touching the pipeline"]
-        SEL["Deliveries::Selectors<br/>random_unsent · least_delivered"]
-        CH["Deliveries::Channels<br/>email · log · (sms, push…)"]
-        REV["Moderation reviewers<br/>heuristic · Anthropic"]
-    end
-
-    subgraph data["State"]
-        PG[("PostgreSQL<br/>subscribers · messages<br/>subscriber_emails")]
-        REDIS[("Redis<br/>Sidekiq queues + schedule")]
-    end
-
-    API --> SAVE --> SCREEN --> REV
-    API --> STATS
-    DISPATCH --> DISP
-    DISP -- "enqueue per subscriber" --> REDIS
-    REDIS --> DELIVER --> SEND
-    SEND --> SEL
-    SEND --> CH
-    CH -- "Action Mailer / SMTP" --> OUT(["Subscriber's inbox"])
-    DISP --> PG
-    SEND --> PG
-    SAVE --> PG
-    STATS --> PG
+```console
+$ bundle install
+$ bin/rails db:setup                            # create, migrate, seed
+$ bin/rails s                                   # API on :3000
+$ bundle exec sidekiq -C config/sidekiq.yml     # ← the half that sends
 ```
 
-**Why a service layer at all.** The job used to do everything: load every note,
-walk every active subscriber, subtract, pick, write the row and make a blocking
-SMTP call, all inside one transaction on one thread. Every rule in the product
-lived inside a method that could only be exercised by running a job. Splitting
-it into *choose a note*, *send it*, *record it* gave each rule a name, a unit
-test, and a place for a second implementation to go.
+Give it a minute, then `/letter_opener` shows every note the worker has sent,
+`/sidekiq` the queues and the schedule, `/api/v1/deliveries/stats` what the
+pipeline thinks it is doing, `/up` a plain `200 ok` for the healthcheck, and
+`bin/rails deliveries:tick` runs the dispatcher without waiting for the cron.
 
-### One delivery, step by step
+![The development mail viewer, showing notes delivered one per minute](docs/screenshots/delivered-note.png)
 
-`claim → send → confirm` is the whole design. The claim is a plain `INSERT` into
-`subscriber_emails`, and the unique index on `(subscriber_id, message_id)` is
-the lock - two workers racing on the same subscriber cannot both send the same
-note, because the loser's insert is simply rejected. No advisory lock, no
-`SELECT ... FOR UPDATE`, no extra round trip.
+Each group in that list is one tick, a minute apart because the seeded
+`DELIVERY_INTERVAL_MINUTES` is `1`; set it to `1440` for a note a day. Full
+transcripts — boot, worker logs, request/response pairs, the benchmark and the
+test run — are in **[docs/captured-output.md](docs/captured-output.md)**.
+
+## One tick, end to end
+
+A tick does no sending of its own. It finds who is due, enqueues one job per
+subscriber, and returns; the sends then run across every thread in the fleet, so
+a hung SMTP connection delays exactly one subscriber.
 
 ```mermaid
 sequenceDiagram
@@ -120,448 +71,250 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Ch as Channel (email)
 
-    Cron->>Disp: tick (every minute)
+    Cron->>Disp: tick, every minute
     loop keyset pages of DELIVERY_BATCH_SIZE
-        Disp->>DB: SELECT id FROM subscribers<br/>WHERE due AND id > cursor ORDER BY id LIMIT n
-        DB-->>Disp: ids
-        Disp->>Q: enqueue DeliverNoteJob(id) ×n
+        Disp->>DB: SELECT id WHERE due AND id > cursor ORDER BY id LIMIT n
+        Disp->>Q: enqueue DeliverNoteJob(id) x n
     end
-
     Q->>Job: perform(subscriber_id)
-    Job->>DB: UPDATE subscribers SET last_delivered_at = now<br/>WHERE id = ? AND still due
-    alt no row updated
-        DB-->>Job: 0 — another tick already has this slot
+    Job->>DB: UPDATE subscribers SET last_delivered_at = now WHERE id = ? AND still due
+    alt 0 rows updated — another tick owns this slot
         Job-->>Q: done, nothing sent
     else slot claimed
-        Job->>DB: SELECT … FROM messages WHERE NOT EXISTS (delivery row) LIMIT 1
-        DB-->>Job: the next note (or nothing)
+        Job->>DB: SELECT a note WHERE NOT EXISTS (delivery row) LIMIT 1
         Job->>DB: INSERT subscriber_emails (status: claimed)
         Note over Job,DB: unique (subscriber_id, message_id)<br/>rejects a racing duplicate
-        Job->>Ch: deliver(subscriber:, note:)
-        Note over Job,Ch: outside any transaction —<br/>no connection held across the network
+        Job->>Ch: deliver(subscriber:, note:) — outside any transaction
         alt provider accepted
             Ch-->>Job: provider reference
-            Job->>DB: UPDATE … status: delivered, delivered_at, reference
-        else transient failure (connection refused, timeout)
+            Job->>DB: UPDATE status: delivered, delivered_at, reference
+        else connection refused, timeout
             Ch-->>Job: TransientError
             Job->>DB: DELETE the claim — same note offered again next tick
-        else ambiguous failure
+        else anything else
             Ch-->>Job: StandardError
-            Job->>DB: UPDATE … status: failed, failure_reason
-            Note over Job,DB: never retried: we cannot prove it was not sent,<br/>and a duplicate is worse than a missed note
+            Job->>DB: UPDATE status: failed, failure_reason
+            Note over Job,DB: not retried: we cannot prove it was not sent,<br/>and a duplicate is worse than a missed note
         end
     end
 ```
 
-Three properties fall out of that ordering:
+Three properties fall out of that ordering. **The send happens outside any
+transaction:** the implementation this replaced wrapped the SMTP call in one, so
+a connection and a row lock were held for the whole provider round trip, and at
+a few hundred subscribers that alone exhausts the connection pool.
 
-* **The send happens outside any transaction.** The previous implementation
-  wrapped the SMTP call in one, so a database connection and a row lock were
-  held for the whole provider round trip. At a few hundred subscribers that
-  alone exhausts the connection pool.
-* **The row is written before the send, and confirmed after.** A row that was
-  claimed but never confirmed is visible in the `claimed` state instead of being
-  indistinguishable from a success. `SubscriberEmail.unconfirmed` is the alert.
-* **Failures are classified, not lumped together.** A refused connection means
-  the provider never saw the note, so the claim is released and the same note is
-  offered again. Anything else is ambiguous, so the claim is kept in the
-  `failed` state and the subscriber gets a *different* note next time. For a
-  product whose notes are interchangeable, losing one note beats sending a
-  duplicate.
+**The row is written before the send and confirmed after,** so a row claimed but
+never confirmed stays visible in the `claimed` state rather than being
+indistinguishable from a success (`SubscriberEmail.unconfirmed` is the alert).
+The code path this replaced committed the row and the send together, which is
+why the migration introducing `status` backfills every pre-existing row as
+`delivered`: back then, a row existing *was* the proof it had been sent.
 
----
+**Failures are classified, not lumped together:** `Channels::Email` lists the
+errors that mean the provider never accepted the note, everything else is
+ambiguous by default, and for a product whose notes are interchangeable, losing
+one note beats sending a duplicate.
 
-## Quickstart
+Which note is chosen and how it travels are registry lookups
+(`Deliveries::Selectors`, `Deliveries::Channels`) wired in
+`config/initializers/deliveries.rb` and picked by env var. Each has two real
+implementations — `random_unsent` / `least_delivered` and `email` / `log`, the
+last of which is how the benchmark drives the dispatcher without pointing a load
+test at an SMTP server.
 
-```console
-$ docker compose up --build
+## What the three tables promise
+
+```mermaid
+erDiagram
+    SUBSCRIBERS ||--o{ SUBSCRIBER_EMAILS : receives
+    MESSAGES    ||--o{ SUBSCRIBER_EMAILS : "is sent as"
+
+    SUBSCRIBERS {
+        bigint id PK
+        string email UK "lower-cased, trimmed, max 50"
+        boolean is_active "partial index predicate"
+        datetime last_delivered_at "scheduling cursor, not a record"
+    }
+    MESSAGES {
+        bigint id PK
+        string text "max 500"
+        string review_status "approved / flagged / rejected"
+        integer deliveries_count "counter cache"
+    }
+    SUBSCRIBER_EMAILS {
+        bigint id PK
+        bigint subscriber_id FK "unique with message_id"
+        bigint message_id FK
+        string status "claimed / delivered / failed"
+        string channel "email, log, ..."
+        datetime delivered_at
+        string provider_reference "or failure_reason, on the way out"
+    }
 ```
 
-That is the whole thing: Postgres, Redis, the API on <http://localhost:8191>,
-and the Sidekiq worker. The web container migrates and seeds on the way up, so
-there are ten notes and four subscribers waiting.
+`index_subscriber_emails_on_subscriber_id_and_message_id` is the exactly-once
+mechanism: the claim is a plain `INSERT`, so two workers racing on the same
+subscriber cannot both send the same note — the loser's insert is rejected. No
+advisory lock, no `SELECT ... FOR UPDATE`, no extra round trip. And
+`subscribers.last_delivered_at` is deliberately *not* a delivery record; it is a
+rate-limit cursor that moves before the send, while the truth about what was
+sent lives in `subscriber_emails`, written after.
 
-> **Nothing is emailed unless the `worker` container is running.** The schedule
-> lives inside the Sidekiq process (`config/sidekiq.yml`), not in Puma. If you
-> start only `web`, the API works perfectly and not a single note is ever sent.
-> `docker compose up` starts both.
+The other two indexes are partial: `index_subscribers_due_for_delivery` is
+`(last_delivered_at, id) WHERE is_active`, and
+`index_subscriber_emails_needing_attention` covers `status <> 'delivered'` —
+delivered rows are the overwhelming majority and nothing queries them by status.
 
-Give it a minute, then:
+## The double-send, found by running it
 
-| | |
-| --- | --- |
-| <http://localhost:8191/letter_opener> | every note the worker has sent |
-| <http://localhost:8191/sidekiq> | queues, the schedule, retries |
-| <http://localhost:8191/api/v1/deliveries/stats> | what the pipeline is doing |
-| <http://localhost:8191/up> | liveness, used by the container healthcheck |
+Firing `deliveries:tick` by hand so that it raced the cron gave every subscriber
+two notes inside one minute — the dispatcher's "is this subscriber due?" check
+and the job's send were not atomic. The fix is `Subscriber.claim_delivery_slot` —
+predicate and write in one conditional `UPDATE`, so Postgres serialises the two
+racing statements and the loser matches no rows:
 
-To watch a delivery without waiting for the cron:
-
-```console
-$ docker compose exec web bundle exec rails deliveries:tick
-Enqueued 4 delivery job(s). They run in the Sidekiq process.
+```ruby
+due(now, interval).where(id: id).update_all(last_delivered_at: now, updated_at: now) == 1
 ```
 
-Ports `8191` (API) and `8192` (Postgres) are set in `docker-compose.yml`; change
-them there if they clash.
+It runs in `DeliverNoteJob`, not in the dispatcher: dispatch and delivery can be
+minutes apart under load, so "looked due at enqueue time" is not something the
+sender is allowed to trust. Back-to-back ticks now enqueue 4 jobs and then 0
+([docs/captured-output.md §6](docs/captured-output.md)).
 
----
+## Finding the due set: 1,439 ms → 4.1 ms
 
-## Configuration
-
-Everything that differs between environments is read from the environment.
-Nothing is hardcoded and no secret is committed.
-
-| Variable | Required | Default | What it does |
-| --- | --- | --- | --- |
-| `DATABASE_HOST` | no | local socket | Postgres host |
-| `DATABASE_PORT` | no | `5432` | Postgres port |
-| `DATABASE_USER` | no | current user | Postgres user |
-| `DATABASE_PASSWORD` | no | none | Postgres password |
-| `DATABASE_NAME` | no | `cope_notes_production` | database name, production only |
-| `COPE_NOTES_DATABASE_PASSWORD` | no | none | fallback production password |
-| `RAILS_MAX_THREADS` | no | `5` | Puma threads and the Active Record pool |
-| `REDIS_URL` | no | `redis://127.0.0.1:6379/0` | Sidekiq client and server |
-| `SIDEKIQ_CONCURRENCY` | no | `10` | worker threads per Sidekiq process |
-| `MAILER_FROM_ADDRESS` | no | `no-reply@cope-notes.example` | `From:` on every note |
-| `DELIVERY_INTERVAL_MINUTES` | no | `1` | minimum gap between two notes to one subscriber. `1440` is a note a day |
-| `DELIVERY_BATCH_SIZE` | no | `1000` | subscriber ids per keyset page; the dispatcher's memory ceiling |
-| `DELIVERY_SPREAD_SECONDS` | no | `0` | scatter a tick's jobs over this many seconds instead of enqueuing them at once |
-| `DELIVERY_CHANNEL` | no | `email` | which channel sends. `log` writes to the Rails log instead |
-| `NOTE_SELECTION_STRATEGY` | no | `random_unsent` | which note is chosen. `least_delivered` favours newly written notes |
-| `ANTHROPIC_API_KEY` | no | unset | enables model-based screening. Unset, the offline reviewer is used |
-| `ANTHROPIC_MODEL` | no | `claude-opus-5` | model used for screening |
-| `ANTHROPIC_TIMEOUT_SECONDS` | no | `10` | open and read timeout on the screening call |
-| `SIDEKIQ_WEB_USERNAME` / `SIDEKIQ_WEB_PASSWORD` | no | unset | when **both** are set, `/sidekiq` sits behind HTTP basic auth |
-| `HEALTHCHECK_URL` | no | `http://127.0.0.1:$PORT/up` | what `bin/healthcheck` probes |
-| `PORT` | no | `3000` | Puma's port inside the container |
-
----
-
-## The API
-
-JSON in, JSON out. Parameter wrapping is on, so a body may be sent flat
-(`{"text": "…"}`) or nested (`{"message": {"text": "…"}}`). **There is no
-authentication** - put this behind a gateway before exposing it.
-
-### Notes
-
-| Method | Path | Body | Response |
-| --- | --- | --- | --- |
-| `GET` | `/api/v1/messages` | – | `200`, every note with its recipients. `?review_status=flagged` filters |
-| `GET` | `/api/v1/messages/:id` | – | `200`, or `404` |
-| `POST` | `/api/v1/messages` | `{"text": "…"}` | `201` with the screening verdict, or `422` |
-| `PATCH` | `/api/v1/messages/:id` | `{"text": "…"}` | `200`, re-screened if the text changed, or `422` |
-| `DELETE` | `/api/v1/messages/:id` | – | `204`, or `404` |
-
-`text` is required, 500 characters maximum. Every write runs through
-`Moderation::Screener` and stamps `review_status`:
-
-```console
-$ curl -s -X POST http://localhost:8191/api/v1/messages -H 'Content-Type: application/json' \
-       -d '{"message":{"text":"If it is not working, stop taking your medication for a week."}}'
-HTTP/1.1 201
-{
-    "id": 13,
-    "text": "If it is not working, stop taking your medication for a week.",
-    "review_status": "rejected",
-    "deliveries_count": 0,
-    "subscribers": []
-}
-```
-
-`approved` and `flagged` notes are deliverable; `rejected` ones are excluded
-from selection for good. `flagged` is the editor's queue, not a block.
-
-### Subscribers
-
-| Method | Path | Body | Response |
-| --- | --- | --- | --- |
-| `GET` | `/api/v1/subscribers` | – | `200`, each with the notes they have received |
-| `GET` | `/api/v1/subscribers/:id` | – | `200`, or `404` |
-| `POST` | `/api/v1/subscribers` | `{"email": "…", "name": "…"}` | `201`, or `422` |
-| `PATCH` | `/api/v1/subscribers/:id` | – | `200` - **toggles** `is_active`; the body is ignored |
-| `DELETE` | `/api/v1/subscribers/:id` | – | `204`, or `404` |
-
-Addresses are lower-cased and trimmed before the uniqueness check, so
-`Robin@Example.COM` cannot subscribe alongside `robin@example.com`. `name` and
-`email` are 50 characters each. Deleting a subscriber deletes their delivery
-records.
-
-### Operations
-
-| Method | Path | Response |
-| --- | --- | --- |
-| `GET` | `/api/v1/deliveries/stats` | counts of subscribers, notes and deliveries, plus the live channel, strategy and interval |
-| `GET` | `/up` | `200 ok` |
-
-A Postman collection for the CRUD endpoints is in `postman/`.
-
----
-
-## Development
-
-Requires Ruby 3.0.2 (see `.ruby-version`), PostgreSQL and Redis.
-
-```console
-$ bundle install
-$ bin/rails db:setup                 # create, migrate, seed
-$ bin/rails s                        # API on :3000
-$ bundle exec sidekiq -C config/sidekiq.yml    # ← without this, nothing is sent
-```
-
-### Tests
-
-```console
-$ bin/rails db:test:prepare
-$ bundle exec rspec
-```
-
-or, with no Ruby toolchain on the host, inside the image:
-
-```console
-$ docker compose run --rm -e RAILS_ENV=test web bundle exec rspec
-143 examples, 0 failures
-```
-
-No test makes a network call. The Anthropic reviewer's specs stub `Net::HTTP`
-outright, and with no API key configured the screener never reaches for it at
-all.
-
-### Linting
-
-RuboCop (with `rubocop-rails` and `rubocop-rspec`) is configured in
-`.rubocop.yml` and runs from its own bundle, so lint tooling never enters the
-application's dependency graph and a RuboCop upgrade can never move a runtime
-gem:
-
-```console
-$ bin/lint          # check — installs the lint bundle on first run
-$ bin/lint -A       # autocorrect
-```
-
-### Useful tasks
-
-```console
-$ bin/rails deliveries:tick                            # run the dispatcher now
-$ bin/rails deliveries:stats                           # the stats endpoint, in a terminal
-$ SUBSCRIBER_ID=1 bin/rails deliveries:deliver         # send one note synchronously
-$ bin/rails "deliveries:benchmark[10000,200,60]"       # the numbers quoted below
-```
-
----
-
-## Project structure
-
-```
-app/
-  controllers/api/v1/    HTTP adapters. Parse params, call a service, render.
-    deliveries_controller.rb   GET /deliveries/stats
-  jobs/
-    dispatch_deliveries_job.rb one per tick — fans out, holds nothing
-    deliver_note_job.rb        one per subscriber — the unit of failure isolation
-  models/
-    subscriber.rb              the `due` scope and the atomic slot claim
-    message.rb                 `deliverable` and the `unsent_to` anti-join
-    subscriber_email.rb        the delivery record; claimed → delivered/failed
-  services/
-    deliveries.rb              env-backed configuration for the pipeline
-    deliveries/
-      dispatcher.rb            keyset pagination over the due set
-      send_next_note.rb        claim → send → confirm, and failure classification
-      selectors/               which note: random_unsent, least_delivered
-      channels/                how it travels: email, log
-      stats.rb                 aggregate-only operational snapshot
-      benchmark.rb             reproduces the measurements below
-    moderation/
-      screener.rb              fails open, falls back to the offline reviewer
-      heuristic_reviewer.rb    deterministic, offline, no key needed
-      anthropic_reviewer.rb    Claude via the Messages API
-    notes/save_note.rb         create/update a note, re-screening changed text
-  mailers/, views/message_mailer/   the one thing a subscriber ever sees
-config/
-  sidekiq.yml            queue weights and the once-a-minute cron
-  initializers/deliveries.rb   registers the channels and selectors
-db/migrate/20260923090000_add_delivery_tracking_and_indexes.rb
-spec/                    143 examples: models, services, jobs, mailer, controllers
-docs/captured-output.md  real transcripts of all of the above
-```
-
----
-
-## Design notes
-
-### Scalability: what actually breaks, and when
-
-The original job was a single thread that loaded every note into a hash, walked
-every active subscriber with `includes(:messages)`, subtracted one set from the
-other in Ruby, and made a blocking SMTP call for each. Two separate problems
-live in that sentence: the work grows with the whole table, and it is serial.
-
-`rails "deliveries:benchmark[10000,200,60]"` measures both against a real
-Postgres - 10,000 subscribers, 200 notes, 600,000 existing delivery rows:
+The job this replaced loaded every note into a hash, walked every active
+subscriber with `includes(:messages)`, subtracted one set from the other in
+Ruby, and made a blocking SMTP call for each: the work grew with the whole
+table, and it was serial. `rails "deliveries:benchmark[10000,200,60]"` measures
+the first of those against a real Postgres — 10,000 subscribers, 200 notes,
+600,000 existing delivery rows. Wall-clock came off a busy laptop; the ratios
+and the allocation counts are the deterministic part.
 
 | | before | after | |
 | --- | ---: | ---: | --- |
-| Find who is due (one page) | 1,439 ms | **4.1 ms** | `≈350×` |
-| …objects allocated | 1,330,951 | **1,404** | `≈950×` |
+| Find who is due (one page) | 1,439 ms | **4.1 ms** | ≈350× |
+| …objects allocated | 1,330,951 | **1,404** | ≈950× |
 | One tick's work for 1,000 subscribers | 1,950 ms | **1,235 ms** | |
-| …objects allocated | 1,400,601 | **391,484** | `≈3.6×` |
+| …objects allocated | 1,400,601 | **391,484** | ≈3.6× |
 | Choose one subscriber's next note | – | **0.91 ms** | 9 buffer hits |
 
 Three changes produced that:
 
-1. **A partial index that covers the due set exactly.**
-   `index_subscribers_due_for_delivery` is `(last_delivered_at, id) WHERE
-   is_active`. Unsubscribed rows are not in the index at all, the timestamp
-   gives the range scan, and the trailing `id` makes the dispatcher's walk
-   index-only.
-2. **Keyset pagination, not `OFFSET`.** `id > cursor ORDER BY id LIMIT n`
-   costs the same on page one and page ten thousand, and memory is capped at
+1. **A partial index covering the due set exactly** — `(last_delivered_at, id)
+   WHERE is_active`. Unsubscribed rows are not in the index at all, the
+   timestamp gives the range scan, the trailing `id` makes the walk index-only.
+2. **Keyset pagination, not `OFFSET`** — `id > cursor ORDER BY id LIMIT n` costs
+   the same on page one and page ten thousand, and memory is capped at
    `DELIVERY_BATCH_SIZE` ids however large the table gets.
-3. **`NOT EXISTS` instead of set subtraction in Ruby.** Postgres plans it as a
-   `Hash Right Anti Join` straight off the unique index on
-   `(subscriber_id, message_id)` - 9 shared buffer hits, no heap fetches, and
-   nothing about it grows with how many notes that subscriber has already had.
+3. **`NOT EXISTS` instead of set subtraction in Ruby** — planned as a `Hash
+   Right Anti Join` off the unique index: 9 shared buffer hits, no heap fetches,
+   and nothing about it grows with how many notes that subscriber has already
+   received ([plan](docs/captured-output.md)).
 
-The other half is parallelism. Dispatch and delivery are now separate jobs on
-separate queues, so a tick enqueues and returns while the sends run across every
-thread in the fleet.
+### Capacity — reasoned, not measured
 
-**Capacity, reasoned from those measurements** and a 150 ms SMTP round trip:
+Arithmetic on the measurements above plus an assumed 150 ms SMTP round trip.
+Nothing below was load-tested against a real provider.
 
-* *Before*: ~152 ms per subscriber, serial, in one job. A once-a-minute schedule
-  overruns at roughly **400 subscribers**, and from then on each tick falls
-  further behind the last.
+* *Before*: ~152 ms per subscriber, serial, in one job — a once-a-minute
+  schedule overruns at roughly **400 subscribers**, then falls further behind.
 * *After*: the dispatcher's own work for 10,000 subscribers is ten keyset pages,
-  about **41 ms**. Sending is ~151 ms per subscriber spread across the pool:
-  **≈3,970 subscribers/minute at the default 10 threads, ≈9,900 at 25.** Adding
-  worker containers moves that number linearly; the dispatcher does not care.
-* *At 1M subscribers* a once-a-minute note is not an engineering problem, it is
-  a product one - 151,000 thread-seconds of sending per minute is ~2,500 threads
-  and 16,000 messages/second, which no SMTP provider will accept. At a realistic
-  cadence (`DELIVERY_INTERVAL_MINUTES=1440`) the due set is ~695 subscribers in
-  any given minute - under a single keyset page - and the sustained send work is
-  about **1.8 threads**. The pipeline is then bounded by the provider's rate
-  limit, not by this application.
+  about 41 ms; sending is ~151 ms per subscriber spread across the pool, so
+  **≈3,970 subscribers/minute at the default 10 threads, ≈9,900 at 25.** Worker
+  containers add to that linearly; the dispatcher does not care.
+* *At 1M subscribers* a once-a-minute note is a product problem — ~2,500 threads
+  and 16,000 messages/second, which no provider accepts. At a daily cadence the
+  due set is ~695 subscribers in any minute, under one keyset page, and about
+  **1.8 threads** of sustained sending.
 
 **The thundering herd is real and only partly solved.** A bulk import leaves
-every row with `last_delivered_at` NULL, so the first tick afterwards finds all
-of them due at once and enqueues one job each - a million jobs into Redis in one
-tick, roughly 200 MB of queue. `DELIVERY_SPREAD_SECONDS` scatters *execution*
-over a window, which protects the SMTP provider and flattens the load profile,
-but the jobs are still all enqueued at once. A dispatcher that stops after
-`DELIVERY_MAX_PER_TICK` and resumes from its cursor next minute is the honest
-fix, and it is not implemented.
+every row with `last_delivered_at` NULL, so the next tick finds all of them due
+at once and enqueues one job each — a million jobs into Redis in one tick.
+`DELIVERY_SPREAD_SECONDS` scatters *execution* over a window, which protects the
+provider and flattens the load profile, but the jobs are still all enqueued at
+once. A dispatcher that stops at a per-tick cap and resumes from its cursor next
+minute is the honest fix, and it is not implemented.
 
-Other bounded costs, deliberately: `/api/v1/deliveries/stats` is aggregates
-only, never a collection; `messages.deliveries_count` is a counter cache so
-`least_delivered` stays a single indexed `LIMIT 1` rather than an aggregate over
-the join table; and `index_subscriber_emails_needing_attention` is partial on
-`status <> 'delivered'`, because delivered rows are the overwhelming majority
-and nothing ever queries them by status.
+## The API
 
-**What is still unaddressed.** `GET /api/v1/messages` and
-`GET /api/v1/subscribers` are unpaginated and eager-load the join in both
-directions; they are fine for an editorial tool over a few hundred notes and
-would need cursor pagination before anything else. Delivery rows grow at
-subscribers × notes and nothing archives them.
+JSON in, JSON out, **no authentication anywhere** — put this behind a gateway
+before exposing it. Parameter wrapping is on, so a body may be flat
+(`{"text": "…"}`) or nested (`{"message": {"text": "…"}}`).
 
-### Extensibility: one seam, used twice
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` | `/api/v1/messages` | every note with its recipients; `?review_status=flagged` filters |
+| `POST` | `/api/v1/messages` | `{"text": "…"}` → `201` with the screening verdict, or `422` |
+| `PATCH` / `DELETE` | `/api/v1/messages/:id` | re-screened if the text changed; `204` on delete |
+| `GET` | `/api/v1/subscribers` | each with the notes they have received |
+| `POST` | `/api/v1/subscribers` | `{"email": "…", "name": "…"}`; addresses are lower-cased and trimmed before the uniqueness check |
+| `PATCH` | `/api/v1/subscribers/:id` | **toggles** `is_active` — the body is ignored |
+| `DELETE` | `/api/v1/subscribers/:id` | also deletes that subscriber's delivery rows |
+| `GET` | `/api/v1/deliveries/stats` | aggregate-only snapshot: counts, live channel, strategy, interval |
 
-`Deliveries::Channels` is a registry keyed by name. A channel is any object with
-`deliver(subscriber:, note:) → reference`, and adding SMS means writing that
-class and one line in `config/initializers/deliveries.rb`:
+`text` is 500 characters, `name` and `email` 50 each; `GET /:id` returns `200`
+or `404`. A Postman collection for the CRUD endpoints is in `postman/`.
 
-```ruby
-Deliveries::Channels.register(:sms, Deliveries::Channels::Sms)
-```
+**Screening runs on every write**, because these notes reach people who are
+having a hard time. The offline `HeuristicReviewer` catches only what is
+unambiguous in plain text; `AnthropicReviewer` asks Claude, and runs only when
+`ANTHROPIC_API_KEY` is set. Screening **fails open** — a reviewer that raises
+falls back to the offline one, then to approving — because blocking an editor
+because a third-party API is rate-limited is worse. `rejected` notes are
+excluded from selection for good; `flagged` ones are still deliverable, an
+editor's queue rather than a block.
 
-Nothing above it changes - not the job, not the selection strategy, not
-`SendNextNote`. `DELIVERY_CHANNEL` picks the one in use. The seam is honest
-because it already has two real implementations: `email`, and `log`, which is
-what the benchmark uses to exercise the dispatcher without pointing a load test
-at a real SMTP server.
+## Settings
 
-The same shape is used a second time for note selection.
-`Deliveries::Selectors` is the place an engagement-driven or personalised choice
-goes, and `least_delivered` is there to prove the seam holds: it favours notes
-the fewest subscribers have seen, so a newly written note enters circulation
-immediately instead of waiting for a random draw.
+Everything environment-specific is read from the environment; no secret is
+committed. `MAILER_FROM_ADDRESS`, `DATABASE_*`, `REDIS_URL`, `RAILS_MAX_THREADS`,
+`PORT` and `HEALTHCHECK_URL` do what their names say — `config/database.yml` and
+`docker-compose.yml` show the defaults. The ones that change behaviour:
 
-The channel contract is also where the transient/ambiguous distinction lives.
-`Channels::Email` lists the errors that mean the provider never accepted the
-note; everything else is ambiguous by default. A new channel classifies its own
-failures and the delivery service's guarantee is unchanged.
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DELIVERY_INTERVAL_MINUTES` | `1` | minimum gap between two notes to one subscriber; `1440` is a note a day |
+| `DELIVERY_BATCH_SIZE` | `1000` | subscriber ids per keyset page — the dispatcher's memory ceiling |
+| `DELIVERY_SPREAD_SECONDS` | `0` | scatter a tick's jobs over this many seconds instead of enqueuing them at once |
+| `DELIVERY_CHANNEL` | `email` | which channel sends; `log` writes to the Rails log instead |
+| `NOTE_SELECTION_STRATEGY` | `random_unsent` | `least_delivered` favours newly written notes |
+| `SIDEKIQ_CONCURRENCY` | `10` | worker threads per Sidekiq process |
+| `ANTHROPIC_API_KEY` | unset | enables model-based screening; unset, the offline reviewer is used |
+| `SIDEKIQ_WEB_USERNAME` / `SIDEKIQ_WEB_PASSWORD` | unset | when **both** are set, `/sidekiq` sits behind HTTP basic auth |
 
-### Screening, and why it fails open
+## Tests and lint
 
-Cope Notes go to people who are having a hard time. A note that is dismissive,
-that gives medication advice, or that could read as encouragement to self-harm
-must never be sent, so screening runs on every write and the delivery path only
-ever selects from notes that are not `rejected`.
+`bin/rails db:test:prepare && bundle exec rspec` → **143 examples, 0 failures**,
+with no network call in any of them: the Anthropic reviewer's specs stub
+`Net::HTTP` outright, and with no API key configured the screener never reaches
+for it. RuboCop runs from its own bundle (`bin/lint`, `bin/lint -A`), so lint
+tooling never enters the application's dependency graph and a RuboCop upgrade
+can never move a runtime gem.
 
-There are two reviewers. `HeuristicReviewer` is deterministic, offline and
-deliberately narrow - it catches only what is unambiguous in plain text and
-approves everything else. `AnthropicReviewer` sends the note to Claude and is
-used **only** when `ANTHROPIC_API_KEY` is set. The app is fully functional with
-no key, and the entire suite passes with no network.
+If you go looking for the sent mail: `letter_opener_web` is mounted **only** in
+development, and compose's `web` and `worker` share a volume at
+`tmp/letter_opener` because the worker sends while the web process serves the
+viewer. Without it the viewer stays empty, which looks exactly like "nothing is
+being sent".
 
-`Screener` fails open: if the configured reviewer raises, the offline reviewer
-answers instead, and if that somehow fails too the note is approved. Blocking an
-editor from writing because a third-party API is rate-limited would be the worse
-outcome, and `flagged` exists so nothing slips past unnoticed. The API call is
-plain `Net::HTTP` rather than the official gem because that gem needs Ruby ≥ 3.2
-and this application is pinned to Ruby 3.0.2; the `Verdict` contract is what the rest of
-the app depends on, so moving to the SDK later is a change to one method body.
+## Known gaps
 
-### Smaller decisions
-
-* **`last_delivered_at` is a scheduling cursor, not a delivery record.**
-  `Subscriber.claim_delivery_slot` moves it with a single conditional `UPDATE`
-  before the send, so two overlapping ticks cannot both send - Postgres
-  serialises the statements and the second matches no rows. The truth about what
-  was sent stays in `subscriber_emails`, which is written after.
-* **The dispatcher and the deliveries have separate queues**, weighted 1:5, so a
-  backlog of sends can never starve the tick that creates them.
-* **`letter_opener_web` is mounted only in development**, and a production image
-  (`--build-arg BUNDLE_WITHOUT="development test"`) does not contain the gem at
-  all. The mount is guarded by `if Rails.env.development?` for exactly that
-  reason.
-* **The compose worker and web share a volume at `tmp/letter_opener`.** The
-  worker sends; the web process serves the viewer. Without the shared volume the
-  viewer is always empty, which looks like "nothing is being sent".
-* **`Gemfile.lock` is not modified by the Docker build.** It is resolved on
-  macOS and lists only the darwin platform, so the `gems` stage runs
-  `bundle lock --add-platform` inside the image. Nobody has to run bundler on a
-  machine they do not develop on in order to build a container.
-
----
-
-## Limitations
-
-* **No authentication, anywhere.** Any caller can create, edit and delete notes
-  and subscribers. `/sidekiq` is behind basic auth only if you set both
-  credentials. This belongs behind a gateway.
+* **No authentication.** Any caller can create, edit and delete notes and
+  subscribers; `/sidekiq` is behind basic auth only if you set both credentials.
 * **No unsubscribe link in the email.** `PATCH /api/v1/subscribers/:id` toggles
-  the flag, but nothing in the note itself lets a recipient act on it. For a
-  product that emails people unprompted this is the first thing to fix, and it
-  is a legal requirement in most jurisdictions.
-* **Index and subscriber listings are unpaginated**, and eager-load the delivery
-  join in both directions.
-* **A dispatcher tick enqueues every due subscriber**, with no per-tick cap - see
-  the thundering-herd note above.
-* **A subscriber who has received every note simply stops**, silently. Nothing
-  alerts an editor that the pool is exhausted; `deliveries/stats` reports the
-  count and that is all.
+  the flag, but nothing in the note lets a recipient act on it. For a product
+  that emails people unprompted this is the first thing to fix, and a legal
+  requirement in most jurisdictions.
+* **Note and subscriber listings are unpaginated** and eager-load the join both
+  ways — fine for an editorial tool over a few hundred notes, not past that.
+* **A subscriber who has received every note simply stops**, silently; delivery
+  rows grow at subscribers × notes with nothing archiving them.
 * **An ambiguous send failure loses that note for that subscriber permanently.**
-  That is the deliberate trade - no duplicates - but it means a provider outage
-  that returns 500s quietly burns one note per affected subscriber. The rows are
-  visible as `status: failed`; nothing reconciles them.
-* **Webpacker, Turbolinks, Sass and Action Cable are Rails-generator leftovers**,
-  as are the unused `spring` and `whenever` gems. The API uses none of them.
-  Pruning them is a dependency change rather than a code one, and this pass kept
-  `Gemfile.lock` byte-identical to the set the suite and the image were verified
-  against.
-* **Notes are plain text.** No localisation, no personalisation beyond the
-  greeting, no send-time optimisation.
+  The deliberate trade — no duplicates — but a provider outage returning 500s
+  quietly burns one note per affected subscriber. The rows are visible as
+  `status: failed`; nothing reconciles them.
+* **Webpacker, Turbolinks, Sass, Action Cable, `spring` and `whenever` are
+  generator leftovers** the API never uses; pruning them is a dependency change.
